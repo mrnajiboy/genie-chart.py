@@ -68,17 +68,19 @@ class ChartEntry:
 
 
 class ChartData:
-    """Represents a particular Bugs chart by a particular period.
+    """Represents a particular Genie chart by a particular period.
     Attributes:
         date: The chart date.
-        chartType: The chart type.
         chartPeriod: The period for the chart. (default: GenieChartPeriod.Realtime)
-        fetch: A boolean value that indicates whether to retrieve the chart data immediately. If set to `False`, you can fetch the data later using the `fetchEntries()` method.
+        fetch: A boolean value that indicates whether to retrieve the chart data immediately.
+               If set to `False`, you can fetch the data later using the `fetchEntries()` method.
     """
 
-    def __init__(self,
-                 chartPeriod: GenieChartPeriod = GenieChartPeriod.Realtime,
-                 fetch: bool = True):
+    def __init__(
+        self,
+        chartPeriod: GenieChartPeriod = GenieChartPeriod.Realtime,
+        fetch: bool = True,
+    ):
         self.chartPeriod = chartPeriod
         self.entries = []
 
@@ -96,10 +98,16 @@ class ChartData:
 
     def fetchEntries(self):
         headers = {
-            "Content-Type": _CONTENT_TYPE
+            "Content-Type": _CONTENT_TYPE,
+            # Add a realistic User-Agent so Genie does not return HTML/app error pages
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            ),
         }
 
-        if self.chartPeriod != GenieChartPeriod.Realtime and self.chartPeriod != GenieChartPeriod.Alltime:
+        if self.chartPeriod not in (GenieChartPeriod.Realtime, GenieChartPeriod.Alltime):
             data = {
                 "ditc": self.chartPeriod
             }
@@ -115,37 +123,52 @@ class ChartData:
         else:
             url = _CHART_API_URL
 
-        res = requests.post(
-            url,
-            headers=headers,
-            data=data
-        )
+        try:
+            res = requests.post(
+                url,
+                headers=headers,
+                data=data,
+                timeout=10,
+            )
+        except Exception as e:
+            raise GenieChartRequestException(f"Request failed: {e}")
 
         if res.status_code != 200:
-            message = f"Request is invalid. response status code={res.status_code}"
-            raise GenieChartParseException(message)
+            message = (
+                f"Request is invalid. status={res.status_code}, "
+                f"body_snippet={res.text[:200]}"
+            )
+            raise GenieChartRequestException(message)
 
-        data = res.json()
-        if int(data['Result']['RetCode']) > 0:
-            message = f"Request is invalid. response message=${data['Result']['RetMsg']}"
+        try:
+            data = res.json()
+        except Exception as e:
+            # If Genie starts returning HTML or some other content,
+            # this will surface enough info for debugging.
+            raise GenieChartParseException(
+                f"Failed to parse JSON from Genie. error={e}, "
+                f"body_snippet={res.text[:200]}"
+            )
+
+        if int(data["Result"]["RetCode"]) > 0:
+            message = f"Request is invalid. response message={data['Result']['RetMsg']}"
             raise GenieChartParseException(message)
 
         self._parseEntries(data)
 
     def _parseEntries(self, data):
         try:
-            self.date = self._parseDate(data['PageInfo'].get('ChartTime'))
-            for item in data['DataSet']['DATA']:
+            self.date = self._parseDate(data["PageInfo"].get("ChartTime"))
+            for item in data["DataSet"]["DATA"]:
                 entry = ChartEntry(
-                    title=unquote(item['SONG_NAME']),
-                    artist=unquote(item['ARTIST_NAME']),
-                    image=unquote(item['ALBUM_IMG_PATH']),
-                    peakPos=int(item.get('TOP_RANK_NO') or 0),
-                    lastPos=int(item['PRE_RANK_NO']),
-                    rank=int(item['RANK_NO'])
+                    title=unquote(item["SONG_NAME"]),
+                    artist=unquote(item["ARTIST_NAME"]),
+                    image=unquote(item["ALBUM_IMG_PATH"]),
+                    peakPos=int(item.get("TOP_RANK_NO") or 0),
+                    lastPos=int(item["PRE_RANK_NO"]),
+                    rank=int(item["RANK_NO"]),
                 )
                 self.entries.append(entry)
-            pass
         except Exception as e:
             raise GenieChartParseException(e)
 
